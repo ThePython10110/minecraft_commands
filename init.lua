@@ -34,7 +34,7 @@ local function parse_args(str)
     local found = {}
      -- selectors
     repeat
-        tmp = {str:find("(@[psaer])%s*(%b[])", i)}
+        tmp = {str:find("(@[psaer])%s*(%[.-%])", i)}
         if tmp[1] then
             i = tmp[2] + 1
             tmp.type = "selector_data"
@@ -44,7 +44,7 @@ local function parse_args(str)
 
      -- items
     repeat
-        tmp = {str:find("([_%w]*:?[_%w]+)%s*(%b[])%s*(%d*)", i)}
+        tmp = {str:find("([_%w]*:?[_%w]+)%s*(%[.-%])%s*(%d*)", i)}
         if tmp[1] then
             i = tmp[2] + 1
             if handle_alias(tmp[3]) then
@@ -118,11 +118,14 @@ local function parse_range(num, range)
     return true
 end
 
-local function get_entity_name(obj, use_id)
+local function get_entity_name(obj)
     if obj:is_player() then
         return obj:get_player_name()
     else
-        return obj:get_luaentity()._nametag or obj:get_luaentity().name
+        local luaentity = obj:get_luaentity()
+        if luaentity then
+            return luaentity._nametag
+        end
     end
 end
 
@@ -360,7 +363,8 @@ register_command("kill", {
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
         if param == "" then param = "@s" end
-        local targets = parse_selector(param, caller)
+        local split_param = parse_args(param)
+        local targets = parse_selector(split_param[1], caller)
         local count = 0
         local last
         for _, target in ipairs(targets) do
@@ -368,7 +372,7 @@ register_command("kill", {
                 if not (target:is_player() and minetest.is_creative_enabled(target:get_player_name())) then
                     target:set_hp(0, {type = "set_hp", better_commands = "kill"})
                     count = count + 1
-                    last = get_entity_name(target, true)
+                    last = get_entity_name(target)
                 end
             end
         end
