@@ -1,3 +1,4 @@
+local S = minetest.get_translator()
 
 better_commands = {commands = {}}
 
@@ -23,8 +24,8 @@ local function register_command(name, def)
 end
 
 local function handle_alias(itemstring)
-    local name = ItemStack(itemstring):get_name()
-    return name ~= "" and name
+    local stack = ItemStack(itemstring)
+    return stack:is_known() and stack:get_name() ~= "unknown"
 end
 
 local function parse_args(str)
@@ -33,29 +34,41 @@ local function parse_args(str)
     local found = {}
      -- selectors
     repeat
-        tmp = {str:find("(@[psaer]%s?%b[])", i)}
+        tmp = {str:find("(@[psaer])%s*(%b[])", i)}
         if tmp[1] then
             i = tmp[2] + 1
-            tmp.type = "selector"
+            tmp.type = "selector_data"
             table.insert(found, table.copy(tmp))
         end
     until not tmp[1]
 
      -- items
     repeat
-        tmp = {str:find("(([_%w]*:?[_%w]+)%s?%b[])", i)}
+        tmp = {str:find("([_%w]*:?[_%w]+)%s*(%b[])%s*(%d*)", i)}
         if tmp[1] then
             i = tmp[2] + 1
-            if minetest.registered_items[handle_alias(tmp[4])] then
-                tmp.type = "item"
+            if handle_alias(tmp[3]) then
+                tmp.type = "item_data"
                 table.insert(found, table.copy(tmp))
             end
         end
     until not tmp[1]
 
+    -- items without extra data
+   repeat
+       tmp = {str:find("([_%w]*:?[_%w]+)%s+(%d+)", i)}
+       if tmp[1] then
+           i = tmp[2] + 1
+           if handle_alias(tmp[3]) then
+               tmp.type = "item"
+               table.insert(found, table.copy(tmp))
+           end
+       end
+   until not tmp[1]
+
      -- everything else
     repeat
-        tmp = {str:find("%s?(%S+)%s?", i)}
+        tmp = {str:find("%s-(%S+)%s-", i)}
         if tmp[1] then
             i = tmp[2] + 1
             local overlap
@@ -95,6 +108,7 @@ end
 
 local function parse_range(num, range)
     if tonumber(range) then return num == range end
+    -- "min..max" where both numbers are optional
     local _, _, min, max = range:find("(%d*%.?%d*)%s*%.%.%s*(%d*%.?%d*)")
     if not min then return end
     min = tonumber(min)
@@ -104,33 +118,37 @@ local function parse_range(num, range)
     return true
 end
 
+local function get_entity_name(obj, use_id)
+    if obj:is_player() then
+        return obj:get_player_name()
+    else
+        return obj:get_luaentity()._nametag or obj:get_luaentity().name
+    end
+end
+
 -- Returns a list of ObjectRefs matching the selector
--- or true in the case of @s.
-local function parse_selector(str, caller)
+-- (if @s with a command block, {command block's position} instead)
+local function parse_selector(selector_data, caller)
     local command_block = not caller.is_player
     local pos = command_block and caller or caller:get_pos()
     local result = {}
-    if str:sub(1,1) ~= "@" then
-        return {minetest.get_player_by_name(str)}
+    if selector_data[3]:sub(1,1) ~= "@" then
+        return {minetest.get_player_by_name(selector_data[3])}
     end
-
-    local _, _, args = str:find("(%b[])")
     local arg_table = {}
-    if args then
+    if selector_data[4] then
         -- basically matching "(thing)=(thing)[,%]]"
-        for key, value in args:gmatch("(%w+)%s*=%s*([^,%]]+)%s*[,%]]") do
+        for key, value in selector_data[4]:gmatch("([%w_]+)%s*=%s*([^,%]]+)%s*[,%]]") do
             arg_table[key:trim()] = value:trim()
         end
         minetest.log(dump(arg_table))
     end
 
-    local selector = str:sub(1,2)
-    minetest.log(selector)
     local objects = {}
-    if selector == "@s" then
+    if selector_data[3] == "@s" then
         return {caller}
     end
-    if selector == "@e" then
+    if selector_data[3] == "@e" then
         for _, luaentity in pairs(minetest.luaentities) do
             if luaentity.object:get_pos() then
                 table.insert(objects, luaentity.object)
@@ -140,7 +158,7 @@ local function parse_selector(str, caller)
             table.insert(objects, player)
         end
     end
-    if selector == "@a" or selector == "@p" or selector == "@r" then
+    if selector_data[3] == "@a" or selector_data[3] == "@p" or selector_data[3] == "@r" then
         for _, player in pairs(minetest.get_connected_players()) do
             table.insert(objects, player)
         end
@@ -173,11 +191,7 @@ local function parse_selector(str, caller)
                             matches = false
                         end
                     elseif key == "name" then
-                        if obj:is_player() then
-                            matches = obj:get_player_name() == value
-                        else
-                            matches = obj:get_luaentity()._nametag == value
-                        end
+                        matches = get_entity_name(obj) == value
                     elseif key == "r" then
                         matches = vector.distance(obj:get_pos(), pos) < value
                     elseif key == "rm" then
@@ -196,6 +210,94 @@ local function parse_selector(str, caller)
     return result
 end
 
+local function parse_item(item_data)
+    if not handle_alias(item_data[3]) then return end
+    if item_data.type == "item" then
+        local stack = ItemStack(item_data[3])
+        stack:set_count(tonumber(item_data[4]) or 1)
+        stack:set_wear(tonumber(item_data[5]) or 1)
+        return stack
+    elseif item_data.type == "item_data" then
+        local arg_table = {}
+        if item_data[4] then
+            -- basically matching "(thing)=(thing)[,%]]"
+            for key, value in item_data[4]:gmatch("([%w_]+)%s*=%s*([^,%]]+)%s*[,%]]") do
+                arg_table[key:trim()] = value:trim()
+            end
+            minetest.log(dump(arg_table))
+        end
+        local stack = ItemStack(item_data[3])
+        if arg_table then
+            local meta = stack:get_meta()
+            for key, value in pairs(arg_table) do
+                meta:set_string(key, value)
+            end
+        end
+        stack:set_count(tonumber(item_data[5]) or 1)
+        stack:set_wear(tonumber(item_data[6]) or 1)
+        return stack
+    end
+end
+
+-- Slightly modified from builtin/game/chat.lua
+local function handle_give_command(cmd, giver, receiver, stack_data)
+	core.log("action", (giver or "Command Block").. " invoked " .. cmd
+			.. ', stack_data=' .. dump(stack_data))
+	local itemstack = parse_item(stack_data)
+    if not itemstack then
+        return false, S("Error")
+    end
+	if itemstack:is_empty() then
+		return false, S("Cannot give an empty item.")
+	elseif (not itemstack:is_known()) or (itemstack:get_name() == "unknown") then
+		return false, S("Cannot give an unknown item.")
+	-- Forbid giving 'ignore' due to unwanted side effects
+	elseif itemstack:get_name() == "ignore" then
+		return false, S("Giving 'ignore' is not allowed.")
+	end
+	local receiverref = core.get_player_by_name(receiver)
+	if receiverref == nil then
+		return false, S("@1 is not a known player.", receiver)
+	end
+	local leftover = receiverref:get_inventory():add_item("main", itemstack)
+	local partiality
+	if leftover:is_empty() then
+		partiality = nil
+	elseif leftover:get_count() == itemstack:get_count() then
+		partiality = false
+	else
+		partiality = true
+	end
+	-- The actual item stack string may be different from what the "giver"
+	-- entered (e.g. big numbers are always interpreted as 2^16-1).
+	stack_data = itemstack:to_string()
+	local msg
+	if partiality == true then
+		msg = S("@1 partially added to inventory.", stack_data)
+	elseif partiality == false then
+		msg = S("@1 could not be added to inventory.", stack_data)
+	else
+		msg = S("@1 added to inventory.", stack_data)
+	end
+	if giver == receiver then
+		return true, msg
+	else
+		core.chat_send_player(receiver, msg)
+		local msg_other
+		if partiality == true then
+			msg_other = S("@1 partially added to inventory of @2.",
+					stack_data, receiver)
+		elseif partiality == false then
+			msg_other = S("@1 could not be added to inventory of @2.",
+					stack_data, receiver)
+		else
+			msg_other = S("@1 added to inventory of @2.",
+					stack_data, receiver)
+		end
+		return true, msg_other
+	end
+end
+
 register_command("?", minetest.registered_chatcommands.help)
 
 register_command("ability", {
@@ -206,9 +308,8 @@ register_command("ability", {
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
         local split_param = parse_args(param)
-        minetest.log(dump(split_param))
         if not split_param[1] and split_param[2] then
-            return false, "Missing parameters."
+            return false
         end
         local set = split_param[3] and split_param[3][3]:lower()
         if set and set ~= "true" and set ~= "false" then
@@ -258,13 +359,25 @@ register_command("kill", {
     func = function(name, param, command_block)
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
+        if param == "" then param = "@s" end
         local targets = parse_selector(param, caller)
+        local count = 0
+        local last
         for _, target in ipairs(targets) do
             if target.is_player then
                 if not (target:is_player() and minetest.is_creative_enabled(target:get_player_name())) then
                     target:set_hp(0, {type = "set_hp", better_commands = "kill"})
+                    count = count + 1
+                    last = get_entity_name(target, true)
                 end
             end
+        end
+        if count < 1 then
+            return true, "No matching entity found."
+        elseif count == 1 then
+            return true, string.format("Killed %s.", last)
+        else
+            return true, string.format("Killed %s entities.", count)
         end
     end
 })
@@ -275,3 +388,23 @@ minetest.register_on_player_hpchange(function(player, hp_change, reason)
     end
     return hp_change
 end, true)
+
+register_command("give", {
+    params = "<target> <item> [count] [wear]",
+    description = "Gives [count] of <item> to <target> (item can have data, for instance default:dirt[inventory_image=default_cobble.png])",
+    privs = {server = true},
+    func = function(name, param, command_block)
+        local caller = command_block or minetest.get_player_by_name(name)
+        if not caller then return end
+        local split_param = parse_args(param)
+        minetest.log(dump(split_param))
+        if not (split_param[1] and split_param[2]) then
+            return false
+        end
+        for _, target in ipairs(parse_selector(split_param[1], caller)) do
+            if target.is_player and target:is_player() then
+                minetest.log(dump({handle_give_command("/give", name, target:get_player_name(), split_param[2])}))
+            end
+        end
+    end
+})
