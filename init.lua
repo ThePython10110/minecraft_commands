@@ -129,55 +129,73 @@ local function get_entity_name(obj)
     end
 end
 
--- Returns a list of ObjectRefs matching the selector
+-- key = handle duplicates automatically?
+local supported_keys = {
+    distance = true,
+    name = false,
+    type = false,
+    r = true,
+    rm = true,
+}
+
+-- Returns a success boolean and either an error message or list of ObjectRefs matching the selector
 -- (if @s with a command block, {command block's position} instead)
 local function parse_selector(selector_data, caller)
     local command_block = not caller.is_player
     local pos = command_block and caller or caller:get_pos()
     local result = {}
     if selector_data[3]:sub(1,1) ~= "@" then
-        return {minetest.get_player_by_name(selector_data[3])}
+        return true, {minetest.get_player_by_name(selector_data[3])}
     end
     local arg_table = {}
     if selector_data[4] then
         -- basically matching "(thing)=(thing)[,%]]"
         for key, value in selector_data[4]:gmatch("([%w_]+)%s*=%s*([^,%]]+)%s*[,%]]") do
-            arg_table[key:trim()] = value:trim()
+            table.insert(arg_table, {key:trim(), value:trim()})
         end
         minetest.log(dump(arg_table))
     end
 
     local objects = {}
-    if selector_data[3] == "@s" then
-        return {caller}
+    local selector = selector_data[3]
+    if selector == "@s" then
+        return true, {caller}
     end
-    if selector_data[3] == "@e" then
+    if selector == "@e" then
         for _, luaentity in pairs(minetest.luaentities) do
             if luaentity.object:get_pos() then
                 table.insert(objects, luaentity.object)
             end
         end
+    end
+    if selector == "@e" or selector == "@a" or selector == "@p" or selector == "@r" then
         for _, player in pairs(minetest.get_connected_players()) do
-            table.insert(objects, player)
+            if player:get_pos() then
+                table.insert(objects, player)
+            end
         end
     end
-    if selector_data[3] == "@a" or selector_data[3] == "@p" or selector_data[3] == "@r" then
-        for _, player in pairs(minetest.get_connected_players()) do
-            table.insert(objects, player)
-        end
-    end
+
+    local checked = {}
 
     if arg_table then
         for _, obj in pairs(objects) do
             if obj.is_player then -- checks if it is a valid entity
                 local matches = true
-                for key, value in pairs(arg_table) do
+                for _, arg in pairs(arg_table) do
+                    local key, value = unpack(arg)
+                    if supported_keys[key] == nil then
+                        return "Unsupported key: "..key
+                    elseif supported_keys[key] == true then
+                        if checked[key] then
+                            return "Dupliate key: "..key
+                        end
+                        checked[key] = true
+                    end
                     if key == "distance" then
-                        minetest.log(dump(obj:get_pos()))
                         local distance = vector.distance(obj:get_pos(), pos)
                         if not parse_range(distance, value) then
                             matches = false
-                            break
                         end
                     elseif key == "type" then
                         local obj_type
@@ -190,15 +208,39 @@ local function parse_selector(selector_data, caller)
                             if obj_type == value:sub(2, -1) then
                                 matches = false
                             end
-                        elseif obj_type ~= value then
-                            matches = false
+                        else
+                            if checked["type"] then
+                                return false, "Duplicate key: type"
+                            end
+                            checked["type"] = true
+                            if obj_type ~= value then
+                                matches = false
+                            end
                         end
                     elseif key == "name" then
-                        matches = get_entity_name(obj) == value
+                        local obj_name = get_entity_name(obj)
+                        if value:sub(1,1) == "!" then
+                            if obj_name == value:sub(2, -1) then
+                                matches = false
+                            end
+                        else
+                            if checked["name"] then
+                                return false, "Duplicate key: name"
+                            end
+                            checked["name"] = true
+                            if obj_name ~= value then
+                                matches = false
+                            end
+                        end
                     elseif key == "r" then
                         matches = vector.distance(obj:get_pos(), pos) < value
                     elseif key == "rm" then
                         matches = vector.distance(obj:get_pos(), pos) > value
+                    else
+                        return false, "Report this <weirdness code 1>: "..key
+                    end
+                    if not matches then
+                        break
                     end
                 end
                 if matches then
@@ -210,11 +252,13 @@ local function parse_selector(selector_data, caller)
         result = objects
     end
     minetest.log(dump(result))
-    return result
+    return true, result
 end
 
 local function parse_item(item_data)
-    if not handle_alias(item_data[3]) then return end
+    if not handle_alias(item_data[3]) then
+        return false, "Invalid item: "..tostring(item_data[3])
+    end
     if item_data.type == "item" then
         local stack = ItemStack(item_data[3])
         stack:set_count(tonumber(item_data[4]) or 1)
@@ -301,6 +345,22 @@ local function handle_give_command(cmd, giver, receiver, stack_data)
 	end
 end
 
+-- Intentionally not using register_command because it would be weird if you could do /bc bc bc bc bc bc bc bc kill
+minetest.register_chatcommand("bc", {
+    params = "<command data>",
+    description = "Runs any Better Commands command (except itself), so Better Commands commands don't have to override existing commands.",
+    privs = {},
+    func = function(name, param, command_block)
+        local command, command_param = param:match("^%/?([%w_%/]+)%s*(.*)$")
+        local def = better_commands.commands[command]
+        if def and minetest.check_player_privs(name, def.privs) then
+            return def.func(name, command_param, command_block)
+        else
+            return false, "Invalid command: "..tostring(command)
+        end
+    end
+})
+
 register_command("?", minetest.registered_chatcommands.help)
 
 register_command("ability", {
@@ -386,6 +446,18 @@ register_command("kill", {
     end
 })
 
+register_command("killme", {
+    params = "",
+    description = "Kills self",
+    privs = {server = true},
+    func = function(name, param, command_block)
+        if command_block then return end
+        -- Simpler than writing out the whole thing
+        better_commands.commands.bc(name, "kill")
+    end
+})
+
+-- Make sure things really die when /killed
 minetest.register_on_player_hpchange(function(player, hp_change, reason)
     if reason.better_commands == "kill" then
         return -player:get_properties().hp_max, true
@@ -395,7 +467,7 @@ end, true)
 
 register_command("give", {
     params = "<target> <item> [count] [wear]",
-    description = "Gives [count] of <item> to <target> (item can have data, for instance default:dirt[inventory_image=default_cobble.png])",
+    description = "Gives [count] of <item> to <target>",
     privs = {server = true},
     func = function(name, param, command_block)
         local caller = command_block or minetest.get_player_by_name(name)
@@ -409,6 +481,20 @@ register_command("give", {
             if target.is_player and target:is_player() then
                 minetest.log(dump({handle_give_command("/give", name, target:get_player_name(), split_param[2])}))
             end
+        end
+    end
+})
+
+register_command("giveme", {
+    params = "<item> [count] [wear]",
+    description = "Gives [count] of <item> to the caller",
+    privs = {server = true},
+    func = function(name, param, command_block)
+        local caller = command_block or minetest.get_player_by_name(name)
+        if not caller then return end
+        local split_param = parse_args(param)
+        if caller.is_player and caller:is_player() then
+            handle_give_command("/give", name, name, split_param[1])
         end
     end
 })
