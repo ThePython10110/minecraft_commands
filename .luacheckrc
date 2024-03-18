@@ -45,5 +45,5 @@ read_globals = {
 }
 
 globals = {
-    "better_commands",
+    "minecraft_commands",
 }

@@ -1,4 +1,4 @@
 # Override commands if they already exist (such as /kill)
-better_commands_override (Override existing commands?) bool false
+minecraft_commands_override (Override existing commands?) bool false
 # Commands that only exist in one version will exist regardless of this setting.
-better_commands_edition (Minecraft edition to replicate) enum Java Java,Bedrock
+minecraft_commands_edition (Minecraft edition to replicate) enum Java Java,Bedrock

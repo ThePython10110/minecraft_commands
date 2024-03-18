@@ -1,4 +1,4 @@
-# Better Commands
+# Minecraft Commands
 The goal of this mod is to add Minecraft command syntax (such as `/kill @e[type=mobs_mc:zombie, distance = 2..]`[/icode]`) to Minetest. It will also add command blocks that can run these commands.
 
 ## Known Issues:

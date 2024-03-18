@@ -3,30 +3,30 @@ local S = minetest.get_translator()
 minetest.register_on_mods_loaded(function()
 
 
-better_commands = {commands = {}}
+minecraft_commands = {commands = {}}
 
-better_commands.override = minetest.settings:get_bool("better_commands_override", false)
-better_commands.edition = (minetest.settings:get("better_commands_edition") or "java"):lower()
-better_commands.messages = {
+minecraft_commands.override = minetest.settings:get_bool("minecraft_commands_override", false)
+minecraft_commands.edition = (minetest.settings:get("minecraft_commands_edition") or "java"):lower()
+minecraft_commands.messages = {
     player_error = "%s does not appear to be a valid player. It could be a typo or the player could be offline."
 }
 
 
-local function register_command(name, def)
-    better_commands.commands[name] = def
+function minecraft_commands.register_command(name, def)
+    minecraft_commands.commands[name] = def
     if minetest.registered_chatcommands[name] then
-        if better_commands.override then
+        if minecraft_commands.override then
             minetest.override_chatcommand(name, def)
-            minetest.log("action", "[Better Commands] Overriding "..name)
+            minetest.log("action", "[Minecraft Commands] Overriding "..name)
         else
-            minetest.log("action", "[Better Commands] Not registering "..name.." as it already exists.")
+            minetest.log("action", "[Minecraft Commands] Not registering "..name.." as it already exists.")
         end
     else
         minetest.register_chatcommand(name, def)
     end
 end
 
-local function handle_alias(itemstring)
+function minecraft_commands.handle_alias(itemstring)
     local stack = ItemStack(itemstring)
     return stack:is_known() and stack:get_name() ~= "unknown"
 end
@@ -50,7 +50,7 @@ local function parse_args(str)
         tmp = {str:find("([_%w]*:?[_%w]+)%s*(%[.-%])%s*(%d*)", i)}
         if tmp[1] then
             i = tmp[2] + 1
-            if handle_alias(tmp[3]) then
+            if minecraft_commands.handle_alias(tmp[3]) then
                 tmp.type = "item_data"
                 table.insert(found, table.copy(tmp))
             end
@@ -62,7 +62,7 @@ local function parse_args(str)
        tmp = {str:find("([_%w]*:?[_%w]+)%s+(%d+)", i)}
        if tmp[1] then
            i = tmp[2] + 1
-           if handle_alias(tmp[3]) then
+           if minecraft_commands.handle_alias(tmp[3]) then
                tmp.type = "item"
                table.insert(found, table.copy(tmp))
            end
@@ -86,7 +86,7 @@ local function parse_args(str)
             if not overlap then
                 if tmp[3]:find("^@[psaer]$") then
                     tmp.type = "selector"
-                elseif handle_alias(tmp[3]) then
+                elseif minecraft_commands.handle_alias(tmp[3]) then
                     tmp.type = "item"
                 end
                 table.insert(found, table.copy(tmp))
@@ -322,7 +322,7 @@ local function parse_selector(selector_data, caller)
 end
 
 local function parse_item(item_data)
-    if not handle_alias(item_data[3]) then
+    if not minecraft_commands.handle_alias(item_data[3]) then
         return false, "Invalid item: "..tostring(item_data[3])
     end
     if item_data.type == "item" then
@@ -411,13 +411,13 @@ local function handle_give_command(cmd, giver, receiver, stack_data)
 	end
 end
 
-register_command("bc", {
+minecraft_commands.register_command("bc", {
     params = "<command data>",
-    description = "Runs any Better Commands command (except itself), so Better Commands commands don't have to override existing commands.",
+    description = "Runs any Minecraft Commands command (except itself), so Minecraft Commands commands don't have to override existing commands.",
     privs = {},
     func = function(name, param, command_block)
         local command, command_param = param:match("^%/?([%S]+)%s*(.-)$")
-        local def = better_commands.commands[command]
+        local def = minecraft_commands.commands[command]
         if def and minetest.check_player_privs(name, def.privs) then
             return def.func(name, command_param, command_block)
         else
@@ -426,9 +426,9 @@ register_command("bc", {
     end
 })
 
-register_command("?", minetest.registered_chatcommands.help)
+minecraft_commands.register_command("?", minetest.registered_chatcommands.help)
 
-register_command("ability", {
+minecraft_commands.register_command("ability", {
     params = "<player> <priv> [value]",
     description = "Sets <priv> of <player> to [value] (true/false). If [value] is not supplied, returns the existing value of <priv>.",
     privs = {privs = true},
@@ -484,7 +484,7 @@ register_command("ability", {
     end
 })
 
-register_command("kill", {
+minecraft_commands.register_command("kill", {
     params = "<target>",
     description = "Kills targets",
     privs = {server = true},
@@ -503,7 +503,7 @@ register_command("kill", {
             if target.is_player then
                 if not (target:is_player() and minetest.is_creative_enabled(target:get_player_name())) then
                     last = get_entity_name(target, true)
-                    target:set_hp(0, {type = "set_hp", better_commands = "kill"})
+                    target:set_hp(0, {type = "set_hp", minecraft_commands = "kill"})
                     count = count + 1
                 end
             end
@@ -518,26 +518,26 @@ register_command("kill", {
     end
 })
 
-register_command("killme", {
+minecraft_commands.register_command("killme", {
     params = "",
     description = "Kills self",
     privs = {server = true},
     func = function(name, param, command_block)
         if command_block then return end
         -- Simpler than writing out the whole thing
-        better_commands.commands.bc.func(name, "kill")
+        minecraft_commands.commands.bc.func(name, "kill")
     end
 })
 
 -- Make sure things really die when /killed
 minetest.register_on_player_hpchange(function(player, hp_change, reason)
-    if reason.better_commands == "kill" then
+    if reason.minecraft_commands == "kill" then
         return -player:get_properties().hp_max, true
     end
     return hp_change
 end, true)
 
-register_command("give", {
+minecraft_commands.register_command("give", {
     params = "<target> <item> [count] [wear]",
     description = "Gives [count] of <item> to <target>",
     privs = {server = true},
@@ -560,7 +560,7 @@ register_command("give", {
     end
 })
 
-register_command("giveme", {
+minecraft_commands.register_command("giveme", {
     params = "<item> [count] [wear]",
     description = "Gives [count] of <item> to the caller",
     privs = {server = true},
@@ -574,7 +574,7 @@ register_command("giveme", {
     end
 })
 
-register_command("say", {
+minecraft_commands.register_command("say", {
     params = "<message>",
     description = "Says <message> (which can include selectors such as @a)",
     privs = {server = true},
@@ -585,15 +585,45 @@ register_command("say", {
         if not split_param[1] then return false end
         local message = ""
         for _, data in ipairs(split_param) do
-            if not message:find("^@[aerps]") then
-                message = message..data
-            else
+            if data.type == "selector" or data.type == "selector_data" then
                 local parsed, targets = parse_selector(data, caller)
                 if not parsed then
                     return parsed, targets
                 end
+                for i, obj in ipairs(targets) do
+                    if not obj.is_player then
+                        message = message.."Command Block"
+                        break
+                    end
+                    message = message..get_entity_name(obj, true)
+                    if #targets == 1 then
+                        break
+                    elseif #targets == 2 and i == 1 then
+                        message = message.." and "
+                    elseif i < #targets then
+                        message = message..", "
+                    end
+                end
+            else
+                for i = 3,#data do
+                    message = message.." "..data[i]
+                end
             end
         end
+        minetest.chat_send_all(message)
+    end
+})
+
+minecraft_commands.register_command("teleport", {
+    params = "[entity/ies] <location/entity> ([rotation] | facing <location/entity>) [check_for_nodes]",
+    description = "Teleports and rotates things.",
+    privs = {teleport = true},
+    func = function(name, param, command_block)
+        local caller = command_block or minetest.get_player_by_name(name)
+        if not caller then return end
+        local split_param = parse_args(param)
+        if not split_param[1] then return false end
+        
     end
 })
 
