@@ -545,7 +545,6 @@ register_command("give", {
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
         local split_param = parse_args(param)
-        minetest.log(dump(split_param))
         if not (split_param[1] and split_param[2]) then
             return false
         end
@@ -555,7 +554,7 @@ register_command("give", {
         end
         for _, target in ipairs(targets) do
             if target.is_player and target:is_player() then
-                minetest.log(dump({handle_give_command("/give", name, target:get_player_name(), split_param[2])}))
+                handle_give_command("/give", name, target:get_player_name(), split_param[2])
             end
         end
     end
@@ -571,6 +570,29 @@ register_command("giveme", {
         local split_param = parse_args(param)
         if caller.is_player and caller:is_player() then
             handle_give_command("/give", name, name, split_param[1])
+        end
+    end
+})
+
+register_command("say", {
+    params = "<message>",
+    description = "Says <message> (which can include selectors such as @a)",
+    privs = {server = true},
+    func = function(name, param, command_block)
+        local caller = command_block or minetest.get_player_by_name(name)
+        if not caller then return end
+        local split_param = parse_args(param)
+        if not split_param[1] then return false end
+        local message = ""
+        for _, data in ipairs(split_param) do
+            if not message:find("^@[aerps]") then
+                message = message..data
+            else
+                local parsed, targets = parse_selector(data, caller)
+                if not parsed then
+                    return parsed, targets
+                end
+            end
         end
     end
 })
