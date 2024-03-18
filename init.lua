@@ -1,5 +1,8 @@
 local S = minetest.get_translator()
 
+minetest.register_on_mods_loaded(function()
+
+
 better_commands = {commands = {}}
 
 better_commands.override = minetest.settings:get_bool("better_commands_override", false)
@@ -10,10 +13,10 @@ better_commands.messages = {
 
 
 local function register_command(name, def)
+    better_commands.commands[name] = def
     if minetest.registered_chatcommands[name] then
         if better_commands.override then
             minetest.override_chatcommand(name, def)
-            better_commands.commands[name] = def
             minetest.log("action", "[Better Commands] Overriding "..name)
         else
             minetest.log("action", "[Better Commands] Not registering "..name.." as it already exists.")
@@ -118,13 +121,19 @@ local function parse_range(num, range)
     return true
 end
 
-local function get_entity_name(obj)
+local function get_entity_name(obj, use_id)
     if obj:is_player() then
         return obj:get_player_name()
     else
         local luaentity = obj:get_luaentity()
+        minetest.log(dump(luaentity))
         if luaentity then
-            return luaentity._nametag
+            if not use_id then
+                return luaentity._nametag or ""
+            else
+                local name = luaentity._nametag or luaentity.name
+                return name or "1 object"
+            end
         end
     end
 end
@@ -136,6 +145,9 @@ local supported_keys = {
     type = false,
     r = true,
     rm = true,
+    sort = true,
+    limit = false,
+    c = false,
 }
 
 -- Returns a success boolean and either an error message or list of ObjectRefs matching the selector
@@ -153,7 +165,6 @@ local function parse_selector(selector_data, caller)
         for key, value in selector_data[4]:gmatch("([%w_]+)%s*=%s*([^,%]]+)%s*[,%]]") do
             table.insert(arg_table, {key:trim(), value:trim()})
         end
-        minetest.log(dump(arg_table))
     end
 
     local objects = {}
@@ -175,20 +186,42 @@ local function parse_selector(selector_data, caller)
             end
         end
     end
+    -- Make type selector work for @r (since it does in Bedrock)
+    if selector == "@r" or selector == "@p" then
+        for _, arg in ipairs(arg_table) do
+            if arg[1] == "type" and arg[2] ~= "player" then
+                for _, luaentity in pairs(minetest.luaentities) do
+                    if luaentity.object:get_pos() then
+                        table.insert(objects, luaentity.object)
+                    end
+                end
+            end
+        end
+    end
 
-    local checked = {}
+    local sort
+    if selector == "@p" then
+        sort = "nearest"
+    elseif selector == "@r" then
+        sort = "random"
+    else
+        sort = "arbitrary"
+    end
+    local limit
+    if selector == "@p" then limit = 1 end
 
     if arg_table then
         for _, obj in pairs(objects) do
+            local checked = {}
             if obj.is_player then -- checks if it is a valid entity
                 local matches = true
                 for _, arg in pairs(arg_table) do
                     local key, value = unpack(arg)
                     if supported_keys[key] == nil then
-                        return "Unsupported key: "..key
+                        return false, "Unsupported key: "..key
                     elseif supported_keys[key] == true then
                         if checked[key] then
-                            return "Dupliate key: "..key
+                            return false, "Duplicate key: "..key
                         end
                         checked[key] = true
                     end
@@ -236,6 +269,20 @@ local function parse_selector(selector_data, caller)
                         matches = vector.distance(obj:get_pos(), pos) < value
                     elseif key == "rm" then
                         matches = vector.distance(obj:get_pos(), pos) > value
+                    elseif key == "sort" then
+                        sort = value
+                    elseif key == "limit" or key == "c" then
+                        if checked.limit then
+                            return false, "Only 1 of keys c and limit can exist."
+                        end
+                        checked.limit = true
+                        if not tonumber(value) then
+                            return false, key.." must be a number."
+                        end
+                        limit = math.floor(tonumber(value))
+                        if limit == 0 then
+                            return false, key.." must not be 0."
+                        end
                     else
                         return false, "Report this <weirdness code 1>: "..key
                     end
@@ -251,7 +298,26 @@ local function parse_selector(selector_data, caller)
     else
         result = objects
     end
-    minetest.log(dump(result))
+    -- Sort
+    if sort == "random" then
+        table.shuffle(result)
+    elseif sort == "nearest" or (sort == "furthest" and limit < 0) then
+        table.sort(result, function(a,b) return vector.distance(a:get_pos(), pos) < vector.distance(b:get_pos(), pos) end)
+    elseif sort == "furthest" or (sort == "nearest" and limit < 0) then
+        table.sort(result, function(a,b) return vector.distance(a:get_pos(), pos) > vector.distance(b:get_pos(), pos) end)
+    end
+    -- Limit
+    if limit then
+        local new_result = {}
+        local i = 1
+        while i <= limit do
+            if not result[i] then break end
+            table.insert(new_result, result[i])
+            i = i + 1
+        end
+        result = new_result
+    end
+
     return true, result
 end
 
@@ -345,13 +411,12 @@ local function handle_give_command(cmd, giver, receiver, stack_data)
 	end
 end
 
--- Intentionally not using register_command because it would be weird if you could do /bc bc bc bc bc bc bc bc kill
-minetest.register_chatcommand("bc", {
+register_command("bc", {
     params = "<command data>",
     description = "Runs any Better Commands command (except itself), so Better Commands commands don't have to override existing commands.",
     privs = {},
     func = function(name, param, command_block)
-        local command, command_param = param:match("^%/?([%w_%/]+)%s*(.*)$")
+        local command, command_param = param:match("^%/?([%S]+)%s*(.-)$")
         local def = better_commands.commands[command]
         if def and minetest.check_player_privs(name, def.privs) then
             return def.func(name, command_param, command_block)
@@ -374,11 +439,15 @@ register_command("ability", {
         if not split_param[1] and split_param[2] then
             return false
         end
+        minetest.log(dump(split_param))
         local set = split_param[3] and split_param[3][3]:lower()
         if set and set ~= "true" and set ~= "false" then
             return false, "[value] must be true or false (or missing)"
         end
-        local targets = parse_selector(split_param[1][3], caller)
+        local parsed, targets = parse_selector(split_param[1], caller)
+        if not parsed then
+            return parsed, targets
+        end
         local priv = split_param[2][3]
         if targets then
             for _, target in ipairs(targets) do
@@ -424,15 +493,18 @@ register_command("kill", {
         if not caller then return end
         if param == "" then param = "@s" end
         local split_param = parse_args(param)
-        local targets = parse_selector(split_param[1], caller)
+        local parsed, targets = parse_selector(split_param[1], caller)
+        if not parsed then
+            return parsed, targets
+        end
         local count = 0
         local last
         for _, target in ipairs(targets) do
             if target.is_player then
                 if not (target:is_player() and minetest.is_creative_enabled(target:get_player_name())) then
+                    last = get_entity_name(target, true)
                     target:set_hp(0, {type = "set_hp", better_commands = "kill"})
                     count = count + 1
-                    last = get_entity_name(target)
                 end
             end
         end
@@ -453,7 +525,7 @@ register_command("killme", {
     func = function(name, param, command_block)
         if command_block then return end
         -- Simpler than writing out the whole thing
-        better_commands.commands.bc(name, "kill")
+        better_commands.commands.bc.func(name, "kill")
     end
 })
 
@@ -477,7 +549,11 @@ register_command("give", {
         if not (split_param[1] and split_param[2]) then
             return false
         end
-        for _, target in ipairs(parse_selector(split_param[1], caller)) do
+        local parsed, targets = parse_selector(split_param[1], caller)
+        if not parsed then
+            return parsed, targets
+        end
+        for _, target in ipairs(targets) do
             if target.is_player and target:is_player() then
                 minetest.log(dump({handle_give_command("/give", name, target:get_player_name(), split_param[2])}))
             end
@@ -498,3 +574,5 @@ register_command("giveme", {
         end
     end
 })
+
+end)
