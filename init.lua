@@ -3,13 +3,10 @@ local S = minetest.get_translator()
 minetest.register_on_mods_loaded(function()
 
 
-minecraft_commands = {commands = {}}
+minecraft_commands = {commands = {}, players = {}}
 
 minecraft_commands.override = minetest.settings:get_bool("minecraft_commands_override", false)
 minecraft_commands.edition = (minetest.settings:get("minecraft_commands_edition") or "java"):lower()
-minecraft_commands.messages = {
-    player_error = "%s does not appear to be a valid player. It could be a typo or the player could be offline."
-}
 
 
 function minecraft_commands.register_command(name, def)
@@ -31,47 +28,54 @@ function minecraft_commands.handle_alias(itemstring)
     return stack:is_known() and stack:get_name() ~= "unknown"
 end
 
-local function parse_args(str)
+function minecraft_commands.parse_params(str)
     local i = 1
     local tmp
     local found = {}
-     -- selectors
+    -- selectors
     repeat
         tmp = {str:find("(@[psaer])%s*(%[.-%])", i)}
         if tmp[1] then
             i = tmp[2] + 1
-            tmp.type = "selector_data"
+            tmp.type = "selector"
+            tmp.extra_data = true
             table.insert(found, table.copy(tmp))
         end
     until not tmp[1]
 
-     -- items
+    -- items
+    i = 1
     repeat
         tmp = {str:find("([_%w]*:?[_%w]+)%s*(%[.-%])%s*(%d*)", i)}
         if tmp[1] then
             i = tmp[2] + 1
             if minecraft_commands.handle_alias(tmp[3]) then
-                tmp.type = "item_data"
+                tmp.type = "item"
+                tmp.extra_data = true
                 table.insert(found, table.copy(tmp))
             end
         end
     until not tmp[1]
 
     -- items without extra data
+    i = 1
    repeat
        tmp = {str:find("([_%w]*:?[_%w]+)%s+(%d+)", i)}
        if tmp[1] then
            i = tmp[2] + 1
            if minecraft_commands.handle_alias(tmp[3]) then
                tmp.type = "item"
+               tmp.extra_data = true
                table.insert(found, table.copy(tmp))
            end
        end
    until not tmp[1]
 
-     -- everything else
+    -- everything else
+    i = 1
     repeat
-        tmp = {str:find("%s-(%S+)%s-", i)}
+        tmp = {str:find("(%S+)", i)}
+        minetest.log("Analyzing: "..dump(tmp))
         if tmp[1] then
             i = tmp[2] + 1
             local overlap
@@ -86,8 +90,20 @@ local function parse_args(str)
             if not overlap then
                 if tmp[3]:find("^@[psaer]$") then
                     tmp.type = "selector"
+                elseif minecraft_commands.players[tmp[3]] then
+                    tmp.type = "selector"
                 elseif minecraft_commands.handle_alias(tmp[3]) then
                     tmp.type = "item"
+                elseif tonumber(tmp[3]) then
+                    tmp.type = "number"
+                elseif tmp[3]:lower() == "true" or tmp[3]:lower() == "false" then
+                    tmp.type = "boolean"
+                elseif tmp[3]:find("^~%-?%d*%.?%d*$") then
+                    tmp.type = "relative"
+                elseif tmp[3]:find("^%^%-?%d*%.?%d*$") then
+                    tmp.type = "look_relative"
+                else
+                    tmp.type = "string"
                 end
                 table.insert(found, table.copy(tmp))
             end
@@ -103,13 +119,32 @@ local function parse_args(str)
     if #found > 0 and found[1][1] > 1 then
         local beginning = {str:find("^(.-)%s")}
         if beginning then
-            table.insert(found, 1, {1, #(beginning[3]:trim()), beginning[3]:trim()})
+            beginning[3] = beginning[3]:trim()
+            if beginning[3]:find("^@[psaer]$") then
+                beginning.type = "selector"
+            elseif minecraft_commands.players[beginning[3]] then
+                beginning.type = "selector"
+            elseif minecraft_commands.handle_alias(beginning[3]) then
+                beginning.type = "item"
+            elseif tonumber(beginning[3]) then
+                beginning.type = "number"
+            elseif beginning[3]:lower() == "true" or beginning[3]:lower() == "false" then
+                beginning.type = "boolean"
+            elseif beginning[3]:find("^~%-?%d*%.?%d*$") then
+                beginning.type = "relative"
+            elseif beginning[3]:find("^%^%-?%d*%.?%d*$") then
+                beginning.type = "look_relative"
+            else
+                beginning.type = "string"
+            end
+            table.insert(found, 1, table.copy(beginning))
         end
     end
+    minetest.log(dump(found))
     return found
 end
 
-local function parse_range(num, range)
+function minecraft_commands.parse_range(num, range)
     if tonumber(range) then return num == range end
     -- "min..max" where both numbers are optional
     local _, _, min, max = range:find("(%d*%.?%d*)%s*%.%.%s*(%d*%.?%d*)")
@@ -121,12 +156,11 @@ local function parse_range(num, range)
     return true
 end
 
-local function get_entity_name(obj, use_id)
+function minecraft_commands.get_entity_name(obj, use_id)
     if obj:is_player() then
         return obj:get_player_name()
     else
         local luaentity = obj:get_luaentity()
-        minetest.log(dump(luaentity))
         if luaentity then
             if not use_id then
                 return luaentity._nametag or ""
@@ -138,8 +172,25 @@ local function get_entity_name(obj, use_id)
     end
 end
 
+function minecraft_commands.get_entity_rotation(obj)
+    if obj:is_player() then
+        return {x = obj:get_look_vertical(), y = obj:get_look_horizontal(), z = 0}
+    else
+        return obj:get_rotation()
+    end
+end
+
+function minecraft_commands.set_entity_rotation(obj, rotation)
+    if obj:is_player() then
+        obj:set_look_vertical(rotation.x)
+        obj:set_look_horizontal(rotation.y)
+    else
+        obj:set_rotation(rotation)
+    end
+end
+
 -- key = handle duplicates automatically?
-local supported_keys = {
+minecraft_commands.supported_keys = {
     distance = true,
     name = false,
     type = false,
@@ -152,7 +203,7 @@ local supported_keys = {
 
 -- Returns a success boolean and either an error message or list of ObjectRefs matching the selector
 -- (if @s with a command block, {command block's position} instead)
-local function parse_selector(selector_data, caller)
+function minecraft_commands.parse_selector(selector_data, caller)
     local command_block = not caller.is_player
     local pos = command_block and caller or caller:get_pos()
     local result = {}
@@ -217,9 +268,9 @@ local function parse_selector(selector_data, caller)
                 local matches = true
                 for _, arg in pairs(arg_table) do
                     local key, value = unpack(arg)
-                    if supported_keys[key] == nil then
+                    if minecraft_commands.supported_keys[key] == nil then
                         return false, "Unsupported key: "..key
-                    elseif supported_keys[key] == true then
+                    elseif minecraft_commands.supported_keys[key] == true then
                         if checked[key] then
                             return false, "Duplicate key: "..key
                         end
@@ -227,7 +278,7 @@ local function parse_selector(selector_data, caller)
                     end
                     if key == "distance" then
                         local distance = vector.distance(obj:get_pos(), pos)
-                        if not parse_range(distance, value) then
+                        if not minecraft_commands.parse_range(distance, value) then
                             matches = false
                         end
                     elseif key == "type" then
@@ -251,7 +302,7 @@ local function parse_selector(selector_data, caller)
                             end
                         end
                     elseif key == "name" then
-                        local obj_name = get_entity_name(obj)
+                        local obj_name = minecraft_commands.get_entity_name(obj)
                         if value:sub(1,1) == "!" then
                             if obj_name == value:sub(2, -1) then
                                 matches = false
@@ -321,23 +372,22 @@ local function parse_selector(selector_data, caller)
     return true, result
 end
 
-local function parse_item(item_data)
+function minecraft_commands.parse_item(item_data)
     if not minecraft_commands.handle_alias(item_data[3]) then
         return false, "Invalid item: "..tostring(item_data[3])
     end
-    if item_data.type == "item" then
+    if item_data.type == "item" and not item_data.extra_data then
         local stack = ItemStack(item_data[3])
         stack:set_count(tonumber(item_data[4]) or 1)
         stack:set_wear(tonumber(item_data[5]) or 1)
         return stack
-    elseif item_data.type == "item_data" then
+    elseif item_data.type == "item" then
         local arg_table = {}
         if item_data[4] then
             -- basically matching "(thing)=(thing)[,%]]"
             for key, value in item_data[4]:gmatch("([%w_]+)%s*=%s*([^,%]]+)%s*[,%]]") do
                 arg_table[key:trim()] = value:trim()
             end
-            minetest.log(dump(arg_table))
         end
         local stack = ItemStack(item_data[3])
         if arg_table then
@@ -356,7 +406,7 @@ end
 local function handle_give_command(cmd, giver, receiver, stack_data)
 	core.log("action", (giver or "Command Block").. " invoked " .. cmd
 			.. ', stack_data=' .. dump(stack_data))
-	local itemstack = parse_item(stack_data)
+	local itemstack = minecraft_commands.parse_item(stack_data)
     if not itemstack then
         return false, S("Error")
     end
@@ -411,9 +461,55 @@ local function handle_give_command(cmd, giver, receiver, stack_data)
 	end
 end
 
+-- kind of unnecessary
+local axes = {"x","y","z"}
+
+function minecraft_commands.parse_pos(data, start, obj)
+    local pos = obj.get_pos and obj:get_pos() or obj
+    local result = {x = pos.x, y = pos.y, z = pos.z}
+    local look
+    for i = 0, 2 do
+        if not data[start + i] then
+            return false, "Missing coordinate."
+        end
+        local coordinate, _type = data[start + i][3], data[start + i].type
+        if _type == "number" then
+            if look then
+                return false, "Cannot mix local and global coordinates."
+            end
+            result[axes[i+1]] = tonumber(coordinate)
+            look = false
+        elseif _type == "relative" then
+            if look then
+                return false, "Cannot mix local and global coordinates."
+            end
+            result[axes[i+1]] = result[axes[i+1]] + (tonumber(coordinate:sub(2,-1)) or 0)
+            look = false
+        elseif _type == "look_relative" then
+            if look == false then
+                return false, "Cannot mix local and global coordinates."
+            end
+            result[axes[i+1]] = tonumber(coordinate:sub(2,-1)) or 0
+            look = true
+        else
+            return false, "Invalid coordinate: "..coordinate
+        end
+    end
+    if look then
+        local rotation
+        if not obj.is_player then
+            rotation = vector.new(0,0,0)
+        else
+            rotation = minecraft_commands.get_entity_rotation(obj)
+        end
+        result = vector.add(pos, vector.rotate(result, rotation))
+    end
+    return true, result
+end
+
 minecraft_commands.register_command("bc", {
     params = "<command data>",
-    description = "Runs any Minecraft Commands command (except itself), so Minecraft Commands commands don't have to override existing commands.",
+    description = "Runs any Minecraft Command, so Minecraft Commands don't have to override existing commands.",
     privs = {},
     func = function(name, param, command_block)
         local command, command_param = param:match("^%/?([%S]+)%s*(.-)$")
@@ -435,16 +531,15 @@ minecraft_commands.register_command("ability", {
     func = function(name, param, command_block)
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
-        local split_param = parse_args(param)
+        local split_param = minecraft_commands.parse_params(param)
         if not split_param[1] and split_param[2] then
             return false
         end
-        minetest.log(dump(split_param))
         local set = split_param[3] and split_param[3][3]:lower()
         if set and set ~= "true" and set ~= "false" then
             return false, "[value] must be true or false (or missing)"
         end
-        local parsed, targets = parse_selector(split_param[1], caller)
+        local parsed, targets = minecraft_commands.parse_selector(split_param[1], caller)
         if not parsed then
             return parsed, targets
         end
@@ -492,8 +587,8 @@ minecraft_commands.register_command("kill", {
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
         if param == "" then param = "@s" end
-        local split_param = parse_args(param)
-        local parsed, targets = parse_selector(split_param[1], caller)
+        local split_param = minecraft_commands.parse_params(param)
+        local parsed, targets = minecraft_commands.parse_selector(split_param[1], caller)
         if not parsed then
             return parsed, targets
         end
@@ -502,7 +597,7 @@ minecraft_commands.register_command("kill", {
         for _, target in ipairs(targets) do
             if target.is_player then
                 if not (target:is_player() and minetest.is_creative_enabled(target:get_player_name())) then
-                    last = get_entity_name(target, true)
+                    last = minecraft_commands.get_entity_name(target, true)
                     target:set_hp(0, {type = "set_hp", minecraft_commands = "kill"})
                     count = count + 1
                 end
@@ -544,11 +639,11 @@ minecraft_commands.register_command("give", {
     func = function(name, param, command_block)
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
-        local split_param = parse_args(param)
+        local split_param = minecraft_commands.parse_params(param)
         if not (split_param[1] and split_param[2]) then
             return false
         end
-        local parsed, targets = parse_selector(split_param[1], caller)
+        local parsed, targets = minecraft_commands.parse_selector(split_param[1], caller)
         if not parsed then
             return parsed, targets
         end
@@ -567,7 +662,7 @@ minecraft_commands.register_command("giveme", {
     func = function(name, param, command_block)
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
-        local split_param = parse_args(param)
+        local split_param = minecraft_commands.parse_params(param)
         if caller.is_player and caller:is_player() then
             handle_give_command("/give", name, name, split_param[1])
         end
@@ -581,12 +676,12 @@ minecraft_commands.register_command("say", {
     func = function(name, param, command_block)
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
-        local split_param = parse_args(param)
+        local split_param = minecraft_commands.parse_params(param)
         if not split_param[1] then return false end
         local message = ""
         for _, data in ipairs(split_param) do
-            if data.type == "selector" or data.type == "selector_data" then
-                local parsed, targets = parse_selector(data, caller)
+            if data.type == "selector" then
+                local parsed, targets = minecraft_commands.parse_selector(data, caller)
                 if not parsed then
                     return parsed, targets
                 end
@@ -595,7 +690,7 @@ minecraft_commands.register_command("say", {
                         message = message.."Command Block"
                         break
                     end
-                    message = message..get_entity_name(obj, true)
+                    message = message..minecraft_commands.get_entity_name(obj, true)
                     if #targets == 1 then
                         break
                     elseif #targets == 2 and i == 1 then
@@ -614,17 +709,101 @@ minecraft_commands.register_command("say", {
     end
 })
 
+-- some duplicate code
 minecraft_commands.register_command("teleport", {
-    params = "[entity/ies] <location/entity> ([rotation] | facing <location/entity>) [check_for_nodes]",
+    params = "[entity/ies] <location/entity> ([rotation] | facing <location/entity>)",
     description = "Teleports and rotates things.",
     privs = {teleport = true},
     func = function(name, param, command_block)
         local caller = command_block or minetest.get_player_by_name(name)
         if not caller then return end
-        local split_param = parse_args(param)
+        local split_param = minecraft_commands.parse_params(param)
         if not split_param[1] then return false end
-        
+        if split_param[1].type == "selector" then
+            if not split_param[2] then
+                if command_block then
+                    return false, "Command blocks can't teleport (although I did consider making it possible)"
+                end
+                local parsed, targets = minecraft_commands.parse_selector(split_param[1], caller)
+                if not parsed then
+                    return parsed, targets
+                end
+                if #targets == 0 then
+                    return false, "Target entity not found."
+                elseif #targets > 1 then
+                    return false, "Multiple target entities found. Not teleporting."
+                end
+                local target_pos = targets[1].is_player and targets[1]:get_pos() or targets[1]
+                caller:set_pos(target_pos)
+                caller:add_velocity(-caller:get_velocity())
+                local rotation = minecraft_commands.get_entity_rotation(targets[1]) or vector.new(0,0,0)
+                minecraft_commands.set_entity_rotation(caller, rotation)
+            elseif split_param[2].type == "selector" then
+                local parsed, victims = minecraft_commands.parse_selector(split_param[1], caller)
+                if not parsed then
+                    return parsed, victims
+                end
+                local parsed, targets = minecraft_commands.parse_selector(split_param[2], caller)
+                if not parsed then
+                    return parsed, targets
+                end
+                if #targets == 0 then
+                    return false, "Target entity not found."
+                elseif #targets > 1 then
+                    return false, "Multiple target entities found. Not teleporting."
+                elseif #victims == 0 then
+                    return false, "No entity found."
+                end
+                local target_pos = targets[1].is_player and targets[1]:get_pos() or targets[1]
+                for _, victim in ipairs(victims) do
+                    if victim.is_player then
+                        victim:set_pos(target_pos)
+                        if victim:is_player() then
+                            victim:add_velocity(-victim:get_velocity())
+                        else
+                            victim:set_velocity(vector.new(0,0,0))
+                        end
+                        local rotation = minecraft_commands.get_entity_rotation(targets[1]) or vector.new(0,0,0)
+                        minecraft_commands.set_entity_rotation(victim, rotation)
+                    end
+                end
+                return true
+            elseif split_param[2].type == "number" or split_param[2].type == "relative" or split_param[2].type == "look_relative" then
+                local parsed, victims = minecraft_commands.parse_selector(split_param[1], caller)
+                if not parsed then
+                    return parsed, victims
+                end
+                local parsed, target_pos = minecraft_commands.parse_pos(split_param, 2, caller)
+                if not parsed then
+                    return parsed, target_pos
+                end
+                for _, victim in ipairs(victims) do
+                    if victim.is_player then
+                        victim:set_pos(target_pos)
+                        if not (split_param[2].type == "look_relative"
+                        or split_param[2].type == "relative"
+                        or split_param[3].type == "relative"
+                        or split_param[4].type == "relative") then
+                            if victim:is_player() then
+                                victim:add_velocity(-victim:get_velocity())
+                            else
+                                victim:set_velocity(vector.new(0,0,0))
+                            end
+                        end
+                    end
+                end
+            end
+        end
     end
 })
 
+minecraft_commands.register_command("tp", minecraft_commands.commands.teleport)
+
+end)
+
+-- Build list of all registered players (https://forum.minetest.net/viewtopic.php?t=21582)
+minetest.after(0,function()
+	for name, value in minetest.get_auth_handler().iterate() do
+        minecraft_commands.players[name] = true
+	end
 end)
