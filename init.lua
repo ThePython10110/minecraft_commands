@@ -2,7 +2,6 @@ local S = minetest.get_translator()
 
 minetest.register_on_mods_loaded(function()
 
-
 minecraft_commands = {commands = {}, players = {}}
 
 minecraft_commands.override = minetest.settings:get_bool("minecraft_commands_override", false)
@@ -80,9 +79,9 @@ function minecraft_commands.parse_params(str)
             i = tmp[2] + 1
             local overlap
             for _, thing in pairs(found) do
-                if tmp[1] > thing[1] and tmp[1] < thing[2]
-                or tmp[2] > thing[1] and tmp[2] < thing[2]
-                or tmp[1] < thing[1] and tmp[2] < thing[2] then
+                if tmp[1] >= thing[1] and tmp[1] <= thing[2]
+                or tmp[2] >= thing[1] and tmp[2] <= thing[2]
+                or tmp[1] <= thing[1] and tmp[2] >= thing[2] then
                     overlap = true
                     break
                 end
@@ -115,31 +114,8 @@ function minecraft_commands.parse_params(str)
         return a[1] < b[1]
     end)
 
-     -- beginning
-    if #found > 0 and found[1][1] > 1 then
-        local beginning = {str:find("^(.-)%s")}
-        if beginning then
-            beginning[3] = beginning[3]:trim()
-            if beginning[3]:find("^@[psaer]$") then
-                beginning.type = "selector"
-            elseif minecraft_commands.players[beginning[3]] then
-                beginning.type = "selector"
-            elseif minecraft_commands.handle_alias(beginning[3]) then
-                beginning.type = "item"
-            elseif tonumber(beginning[3]) then
-                beginning.type = "number"
-            elseif beginning[3]:lower() == "true" or beginning[3]:lower() == "false" then
-                beginning.type = "boolean"
-            elseif beginning[3]:find("^~%-?%d*%.?%d*$") then
-                beginning.type = "relative"
-            elseif beginning[3]:find("^%^%-?%d*%.?%d*$") then
-                beginning.type = "look_relative"
-            else
-                beginning.type = "string"
-            end
-            table.insert(found, 1, table.copy(beginning))
-        end
-    end
+     --beginning
+
     minetest.log(dump(found))
     return found
 end
@@ -203,7 +179,7 @@ minecraft_commands.supported_keys = {
 
 -- Returns a success boolean and either an error message or list of ObjectRefs matching the selector
 -- (if @s with a command block, {command block's position} instead)
-function minecraft_commands.parse_selector(selector_data, caller)
+function minecraft_commands.parse_selector(selector_data, caller, require_one)
     local command_block = not caller.is_player
     local pos = command_block and caller or caller:get_pos()
     local result = {}
@@ -368,6 +344,13 @@ function minecraft_commands.parse_selector(selector_data, caller)
         end
         result = new_result
     end
+    if require_one then
+        if #result == 0 then
+            return false, "Target entity not found."
+        elseif #result > 1 then
+            return false, "Multiple target entities found."
+        end
+    end
 
     return true, result
 end
@@ -496,13 +479,18 @@ function minecraft_commands.parse_pos(data, start, obj)
         end
     end
     if look then
-        local rotation
-        if not obj.is_player then
-            rotation = vector.new(0,0,0)
-        else
-            rotation = minecraft_commands.get_entity_rotation(obj)
-        end
-        result = vector.add(pos, vector.rotate(result, rotation))
+        local rotation = minecraft_commands.get_entity_rotation(obj)
+        -- There's almost definitely a better way to do this...
+        -- All I know is when moving in the Y direction,
+        -- X/Z are backwards, and when moving in the Z direction,
+        -- Y is backwards... so I fixed it (probably badly)
+        local result_x = vector.rotate(vector.new(result.x,0,0), rotation)
+        local result_y = vector.rotate(vector.new(0,result.y,0), rotation)
+        result_y.z = -result_y.z
+        result_y.x = -result_y.x
+        local result_z = vector.rotate(vector.new(0,0,result.z), rotation)
+        result_z.y = -result_z.y
+        result = vector.add(vector.add(vector.add(pos, result_x), result_y), result_z)
     end
     return true, result
 end
@@ -709,9 +697,58 @@ minecraft_commands.register_command("say", {
     end
 })
 
+local function handle_tp_rotation(caller, victim, split_param, i)
+    local victim_rot = minecraft_commands.get_entity_rotation(victim)
+    if split_param[i] then
+        local yaw_pitch
+        local facing
+        if split_param[i].type == "number" then
+            victim_rot.y = math.rad(tonumber(split_param[i][3]))
+            yaw_pitch = true
+        elseif split_param[i].type == "relative" then
+            victim_rot.y = victim_rot.y+math.rad(tonumber(split_param[i][3]:sub(2,-1)) or 0)
+            yaw_pitch = true
+        elseif split_param[i].type == "string" and split_param[i][3] == "facing" then
+            facing = true
+        end
+        if yaw_pitch and split_param[i+1] then
+            if split_param[i+1].type == "number" then
+                victim_rot.x = math.rad(tonumber(split_param[i+1][3]))
+            elseif split_param[i+1].type == "relative" then
+                victim_rot.x = victim_rot.x+math.rad(tonumber(split_param[i+1][3]:sub(2,-1)) or 0)
+            end
+        elseif facing and split_param[i+1] then
+            if minecraft_commands.edition == "bedrock" and split_param[i+1].type == "selector" then
+                local parsed, targets = minecraft_commands.parse_selector(split_param[i+1], caller, true)
+                if not parsed then
+                    return parsed, targets
+                end
+                local target_pos = targets[1].is_player and targets[1]:get_pos() or targets[1]
+                victim_rot = vector.dir_to_rotation(vector.direction(victim:get_pos(), target_pos))
+            elseif minecraft_commands.edition == "java" and split_param[i+1].type == "string" and split_param[i+1][3] == "entity" and split_param[i+2].type == "selector" then
+                local parsed, targets = minecraft_commands.parse_selector(split_param[i+2], caller, true)
+                if not parsed then
+                    return parsed, targets
+                end
+                local target_pos = targets[1].is_player and targets[1]:get_pos() or targets[1]
+                victim_rot = vector.dir_to_rotation(vector.direction(victim:get_pos(), target_pos))
+            else
+                local parsed, target_pos = minecraft_commands.parse_pos(split_param, 6, caller)
+                if not parsed then
+                    return parsed, target_pos
+                end
+                victim_rot = vector.dir_to_rotation(vector.direction(victim:get_pos(), target_pos))
+            end
+        end
+        if yaw_pitch or facing then
+            minecraft_commands.set_entity_rotation(victim, victim_rot)
+        end
+    end
+end
+
 -- some duplicate code
 minecraft_commands.register_command("teleport", {
-    params = "[entity/ies] <location/entity> ([rotation] | facing <location/entity>)",
+    params = "[entity/ies] <location/entity> ([yaw] [pitch] | [facing <location/entity>])",
     description = "Teleports and rotates things.",
     privs = {teleport = true},
     func = function(name, param, command_block)
@@ -724,35 +761,27 @@ minecraft_commands.register_command("teleport", {
                 if command_block then
                     return false, "Command blocks can't teleport (although I did consider making it possible)"
                 end
-                local parsed, targets = minecraft_commands.parse_selector(split_param[1], caller)
+                local parsed, targets = minecraft_commands.parse_selector(split_param[1], caller, true)
                 if not parsed then
                     return parsed, targets
-                end
-                if #targets == 0 then
-                    return false, "Target entity not found."
-                elseif #targets > 1 then
-                    return false, "Multiple target entities found. Not teleporting."
                 end
                 local target_pos = targets[1].is_player and targets[1]:get_pos() or targets[1]
                 caller:set_pos(target_pos)
                 caller:add_velocity(-caller:get_velocity())
                 local rotation = minecraft_commands.get_entity_rotation(targets[1]) or vector.new(0,0,0)
                 minecraft_commands.set_entity_rotation(caller, rotation)
+                return true
             elseif split_param[2].type == "selector" then
                 local parsed, victims = minecraft_commands.parse_selector(split_param[1], caller)
                 if not parsed then
                     return parsed, victims
                 end
-                local parsed, targets = minecraft_commands.parse_selector(split_param[2], caller)
+                if #victims == 0 then
+                    return false, "No entity found."
+                end
+                local parsed, targets = minecraft_commands.parse_selector(split_param[2], caller, true)
                 if not parsed then
                     return parsed, targets
-                end
-                if #targets == 0 then
-                    return false, "Target entity not found."
-                elseif #targets > 1 then
-                    return false, "Multiple target entities found. Not teleporting."
-                elseif #victims == 0 then
-                    return false, "No entity found."
                 end
                 local target_pos = targets[1].is_player and targets[1]:get_pos() or targets[1]
                 for _, victim in ipairs(victims) do
@@ -790,9 +819,30 @@ minecraft_commands.register_command("teleport", {
                                 victim:set_velocity(vector.new(0,0,0))
                             end
                         end
+                        handle_tp_rotation(caller, victim, split_param, 5)
                     end
                 end
+                return true
             end
+        elseif split_param[1].type == "number" or split_param[1].type == "relative" or split_param[1].type == "look_relative" then
+            if command_block then
+                return false, "Command blocks can't teleport (although I did consider making it possible)"
+            end
+            local parsed, target_pos = minecraft_commands.parse_pos(split_param, 1, caller)
+            if not parsed then
+                return parsed, target_pos
+            end
+            if caller.is_player and caller:is_player() then
+                caller:set_pos(target_pos)
+                if not (split_param[1].type == "look_relative"
+                or split_param[1].type == "relative"
+                or split_param[2].type == "relative"
+                or split_param[3].type == "relative") then
+                    caller:add_velocity(-caller:get_velocity())
+                end
+            end
+            handle_tp_rotation(caller, caller, split_param, 4)
+            return true
         end
     end
 })
