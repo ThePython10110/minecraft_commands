@@ -74,7 +74,6 @@ function minecraft_commands.parse_params(str)
     i = 1
     repeat
         tmp = {str:find("(%S+)", i)}
-        minetest.log("Analyzing: "..dump(tmp))
         if tmp[1] then
             i = tmp[2] + 1
             local overlap
@@ -697,6 +696,16 @@ minecraft_commands.register_command("say", {
     end
 })
 
+local function point_at_pos(obj, pos)
+    local obj_pos = obj:get_pos()
+    if obj:is_player() then
+        obj_pos.y = obj_pos.y + obj:get_properties().eye_height
+    end
+    local result = vector.dir_to_rotation(vector.direction(obj_pos, pos))
+    result.x = -result.x -- no clue why this is necessary
+    return result
+end
+
 local function handle_tp_rotation(caller, victim, split_param, i)
     local victim_rot = minecraft_commands.get_entity_rotation(victim)
     if split_param[i] then
@@ -718,26 +727,26 @@ local function handle_tp_rotation(caller, victim, split_param, i)
                 victim_rot.x = victim_rot.x+math.rad(tonumber(split_param[i+1][3]:sub(2,-1)) or 0)
             end
         elseif facing and split_param[i+1] then
-            if minecraft_commands.edition == "bedrock" and split_param[i+1].type == "selector" then
+            if split_param[i+1].type == "selector" then
                 local parsed, targets = minecraft_commands.parse_selector(split_param[i+1], caller, true)
                 if not parsed then
                     return parsed, targets
                 end
                 local target_pos = targets[1].is_player and targets[1]:get_pos() or targets[1]
-                victim_rot = vector.dir_to_rotation(vector.direction(victim:get_pos(), target_pos))
-            elseif minecraft_commands.edition == "java" and split_param[i+1].type == "string" and split_param[i+1][3] == "entity" and split_param[i+2].type == "selector" then
+                victim_rot = point_at_pos(victim, target_pos)
+            elseif split_param[i+1][3] == "entity" and split_param[i+2].type == "selector" then
                 local parsed, targets = minecraft_commands.parse_selector(split_param[i+2], caller, true)
                 if not parsed then
                     return parsed, targets
                 end
                 local target_pos = targets[1].is_player and targets[1]:get_pos() or targets[1]
-                victim_rot = vector.dir_to_rotation(vector.direction(victim:get_pos(), target_pos))
+                victim_rot = point_at_pos(victim, target_pos)
             else
-                local parsed, target_pos = minecraft_commands.parse_pos(split_param, 6, caller)
+                local parsed, target_pos = minecraft_commands.parse_pos(split_param, i+1, caller)
                 if not parsed then
                     return parsed, target_pos
                 end
-                victim_rot = vector.dir_to_rotation(vector.direction(victim:get_pos(), target_pos))
+                victim_rot = point_at_pos(victim, target_pos)
             end
         end
         if yaw_pitch or facing then
