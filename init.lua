@@ -665,7 +665,7 @@ minecraft_commands.register_command("say", {
         if not caller then return end
         local split_param = minecraft_commands.parse_params(param)
         if not split_param[1] then return false end
-        local message = ""
+        local message = "["..name.."] "
         for _, data in ipairs(split_param) do
             if data.type == "selector" then
                 local parsed, targets = minecraft_commands.parse_selector(data, caller)
