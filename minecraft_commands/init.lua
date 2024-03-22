@@ -174,6 +174,9 @@ minecraft_commands.supported_keys = {
     sort = true,
     limit = false,
     c = false,
+    x = true,
+    y = true,
+    z = true,
 }
 
 -- Returns a success boolean and either an error message or list of ObjectRefs matching the selector
@@ -237,6 +240,26 @@ function minecraft_commands.parse_selector(selector_data, caller, require_one)
     if selector == "@p" then limit = 1 end
 
     if arg_table then
+        -- Look for pos first
+        local checked = {}
+        for _, arg in pairs(arg_table) do
+            local key, value = unpack(arg)
+            if key == "x" or key == "y" or key == "z" then
+                if checked[key] then
+                    return false, "Duplicate key: "..key
+                end
+                if value:sub(1,1) == "~" then
+                    value = value:sub(2,-1)
+                    if value == "" then value = 0 end
+                end
+                checked[key] = true
+                pos[key] = tonumber(value)
+                if not pos[key] then
+                    return false, "Invalid value for "..key
+                end
+                checked[key] = true
+            end
+        end
         for _, obj in pairs(objects) do
             local checked = {}
             if obj.is_player then -- checks if it is a valid entity
@@ -309,8 +332,6 @@ function minecraft_commands.parse_selector(selector_data, caller, require_one)
                         if limit == 0 then
                             return false, key.." must not be 0."
                         end
-                    else
-                        return false, "Report this <weirdness code 1>: "..key
                     end
                     if not matches then
                         break
@@ -501,7 +522,7 @@ minecraft_commands.register_command("bc", {
     func = function(name, param, command_block)
         local command, command_param = param:match("^%/?([%S]+)%s*(.-)$")
         local def = minecraft_commands.commands[command]
-        if def and minetest.check_player_privs(name, def.privs) then
+        if def and (command_block or minetest.check_player_privs(name, def.privs)) then
             return def.func(name, command_param, command_block)
         else
             return false, "Invalid command: "..tostring(command)
@@ -567,8 +588,8 @@ minecraft_commands.register_command("ability", {
 })
 
 minecraft_commands.register_command("kill", {
-    params = "<target>",
-    description = "Kills targets",
+    params = "[target]",
+    description = "Kills targets or self",
     privs = {server = true},
     func = function(name, param, command_block)
         local caller = command_block or minetest.get_player_by_name(name)
@@ -605,9 +626,7 @@ minecraft_commands.register_command("killme", {
     description = "Kills self",
     privs = {server = true},
     func = function(name, param, command_block)
-        if command_block then return end
-        -- Simpler than writing out the whole thing
-        minecraft_commands.commands.bc.func(name, "kill")
+        minecraft_commands.commands.kill.func(name, "", command_block)
     end
 })
 
@@ -858,6 +877,61 @@ minecraft_commands.register_command("teleport", {
 
 minecraft_commands.register_command("tp", minecraft_commands.commands.teleport)
 
+minecraft_commands.register_command("msg", {
+    params = "<target> <message>",
+    description = "Sends <message> privately to <target>",
+    privs = {shout = true},
+    func = function(name, param, command_block)
+        local caller = command_block or minetest.get_player_by_name(name)
+        if not caller then return end
+        local split_param = minecraft_commands.parse_params(param)
+        if not split_param[1] and split_param[2] then
+            return false
+        end
+        local parsed, targets = minecraft_commands.parse_selector(split_param[1], caller)
+        if not parsed then
+            return parsed, targets
+        end
+        local message = string.format("<%s> %s whispers to you:\n", name, name)
+        for i, data in ipairs(split_param) do
+            if i > 1 then
+                if data.type == "selector" then
+                    local parsed, targets = minecraft_commands.parse_selector(data, caller)
+                    if not parsed then
+                        return parsed, targets
+                    end
+                    for j, obj in ipairs(targets) do
+                        if not obj.is_player then
+                            message = message.."Command Block"
+                            break
+                        end
+                        message = message..minecraft_commands.get_entity_name(obj, true)
+                        if #targets == 1 then
+                            break
+                        elseif #targets == 2 and i == 1 then
+                            message = message.." and "
+                        elseif j < #targets then
+                            message = message..", "
+                        end
+                    end
+                else
+                    for j = 3,#data do
+                        message = message.." "..data[j]
+                    end
+                end
+            end
+        end
+        for _, target in ipairs(targets) do
+            if target.is_player and target:is_player() then
+                minetest.chat_send_player(target:get_player_name(), message)
+            end
+        end
+    end
+})
+
+minecraft_commands.register_command("w", minecraft_commands.commands.msg)
+minecraft_commands.register_command("tell", minecraft_commands.commands.msg)
+
 end)
 
 -- Build list of all registered players (https://forum.minetest.net/viewtopic.php?t=21582)
@@ -866,3 +940,7 @@ minetest.after(0,function()
         minecraft_commands.players[name] = true
 	end
 end)
+
+local modpath = minetest.get_modpath("minecraft_commands")
+dofile(modpath.."/command_blocks.lua")
+
