@@ -1,8 +1,8 @@
+minecraft_commands = {commands = {}, players = {}}
+
 local S = minetest.get_translator()
 
 minetest.register_on_mods_loaded(function()
-
-minecraft_commands = {commands = {}, players = {}}
 
 minecraft_commands.override = minetest.settings:get_bool("minecraft_commands_override", false)
 minecraft_commands.edition = (minetest.settings:get("minecraft_commands_edition") or "java"):lower()
@@ -940,7 +940,3 @@ minetest.after(0,function()
         minecraft_commands.players[name] = true
 	end
 end)
-
-local modpath = minetest.get_modpath("minecraft_commands")
-dofile(modpath.."/command_blocks.lua")
-
