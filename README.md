@@ -71,4 +71,4 @@ Some arguments (such as `name` and `type`) allow you to prefix the value with `!
 4. In games that do not support MTG or MCL digging methods, command blocks may be unbreakable.
 
 ## Textures
-Command block textures are taken from Pixel Perfection by XSheep (CC-BY-SA-4.0).
+Command block textures are my own (CC-BY-SA-4.0), based on Minecraft's.

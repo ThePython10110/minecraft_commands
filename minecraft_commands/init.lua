@@ -115,7 +115,6 @@ function minecraft_commands.parse_params(str)
 
      --beginning
 
-    minetest.log(dump(found))
     return found
 end
 
@@ -785,7 +784,7 @@ minecraft_commands.register_command("teleport", {
         local split_param = minecraft_commands.parse_params(param)
         if not split_param[1] then return false end
         if split_param[1].type == "selector" then
-            if not split_param[2] then
+            if not split_param[2] or split_param[2][3] == "@s" then
                 if command_block then
                     return false, "Command blocks can't teleport (although I did consider making it possible)"
                 end

@@ -89,16 +89,16 @@ minetest.register_on_player_receive_fields(function(player, formname, fields)
         local new_node = table.copy(node)
         new_node.name = minecraft_commands.get_command_block_name(category, new_group)
         minetest.swap_node(pos, new_node)
-        if group == 2 or group == 5 then
+        if new_group == 2 or new_group == 5 then
             minetest.get_node_timer(pos):start(1)
         else
             minetest.get_node_timer(pos):stop()
         end
-        if new_group == 2 or new_group == 5 then
+        if new_group == 2 or new_group == 5 then -- repeating
             if (tonumber(meta:get_string("_delay")) or 1) < 1 then
                 meta:set_string("_delay", "1")
             end
-        elseif group == 2 or group == 5 then
+        elseif group == 2 or group == 5 then -- previous = repeating
             if (tonumber(meta:get_string("_delay")) or 1) == 1 then
                 meta:set_string("_delay", "0")
             end
@@ -138,7 +138,7 @@ end)
 
 local function check_for_chain(pos)
     local dir = minetest.facedir_to_dir(minetest.get_node(pos).param2)
-    local next = vector.add(-dir, pos)
+    local next = vector.add(dir, pos)
     local next_group = minetest.get_item_group(minetest.get_node(next).name, "command_block")
     if next_group == 0 then return end
     if next_group == 3 or next_group == 6 then -- chain
@@ -160,7 +160,7 @@ function minecraft_commands.run_command_block(pos)
     local group = minetest.get_item_group(node.name, "command_block")
     if group > 3 then -- conditional
         local dir = minetest.facedir_to_dir(node.param2)
-        local previous = vector.add(dir, pos)
+        local previous = vector.add(-dir, pos)
         if minetest.get_meta(previous):get_string("_result") ~= "Success" then
             if group == 6 then -- chain
                 check_for_chain(pos)
