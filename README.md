@@ -2,8 +2,8 @@
 The goal of this mod is to add Minecraft command syntax (such as `/kill @e[type=mobs_mc:zombie, distance = 2..]`[/icode]`) to Minetest. It will also add command blocks that can run these commands.
 
 ## Current command list:
-* `/bc`: Allows players to run any Minecraft even if its name matches the name of an existing command (for example, `/bc give @a default:dirt`)
-* `/?`: Aliase for `/help`
+* `/bc`*: Allows players to run any command added by this mod even if its name matches the name of an existing command (for example, `/bc give @a default:dirt` or even `/bc bc bc bc give @a default:dirt`)
+* `/?`: Alias for `/help`
 * `/ability <player> <priv> [true/false]`: Shows or sets `<priv>` of `<player>`.
 * `/kill [target]`: Kills entities (or self if left empty)
 * `/killme`\*: Equivalent to `/kill @s`
@@ -13,7 +13,7 @@ The goal of this mod is to add Minecraft command syntax (such as `/kill @e[type=
 * `/teleport [too many argument combinations]`: Sets entities' position and rotation
 * `/tp`: Alias to `/teleport`
 
-\* Not technically in Minecraft but common enough in Minetest that I decided to add it.
+\* Not technically in Minecraft
 
 ## Entity selectors
 Everywhere you would normally enter a player name, you can use an entity selector instead. Entity selectors let you choose multiple entities and narrow down exactly which ones you want to include.
