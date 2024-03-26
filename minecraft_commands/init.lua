@@ -784,7 +784,7 @@ minecraft_commands.register_command("teleport", {
         local split_param = minecraft_commands.parse_params(param)
         if not split_param[1] then return false end
         if split_param[1].type == "selector" then
-            if not split_param[2] or split_param[2][3] == "@s" then
+            if not split_param[2] then
                 if command_block then
                     return false, "Command blocks can't teleport (although I did consider making it possible)"
                 end
@@ -800,6 +800,9 @@ minecraft_commands.register_command("teleport", {
                 return true
             elseif split_param[2].type == "selector" then
                 local parsed, victims = minecraft_commands.parse_selector(split_param[1], caller)
+                if command_block and split_param[1][3] == "@s" then
+                    return false, "Command blocks can't teleport (although I did consider making it possible)"
+                end
                 if not parsed then
                     return parsed, victims
                 end
@@ -891,7 +894,8 @@ minecraft_commands.register_command("msg", {
         if not parsed then
             return parsed, targets
         end
-        local message = string.format("<%s> %s whispers to you:\n", name, name)
+        local start_message = string.format("<%s> %s whispers to you:", name, name)
+        local message = ""
         for i, data in ipairs(split_param) do
             if i > 1 then
                 if data.type == "selector" then
@@ -922,6 +926,7 @@ minecraft_commands.register_command("msg", {
         end
         for _, target in ipairs(targets) do
             if target.is_player and target:is_player() then
+                minetest.chat_send_player(target:get_player_name(), start_message)
                 minetest.chat_send_player(target:get_player_name(), message)
             end
         end
@@ -938,4 +943,8 @@ minetest.after(0,function()
 	for name, value in minetest.get_auth_handler().iterate() do
         minecraft_commands.players[name] = true
 	end
+end)
+
+minetest.register_on_joinplayer(function(player)
+    minecraft_commands.players[player:get_player_name()] = true
 end)

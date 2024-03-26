@@ -9,9 +9,12 @@ The goal of this mod is to add Minecraft command syntax (such as `/kill @e[type=
 * `/killme`\*: Equivalent to `/kill @s`
 * `/give <player> <item>`: Gives `<item>` to `<player>`
 * `/giveme <item>`\*: Equivalent to `/give @s <item>`
+* `/msg`: Alias for `/tell`
 * `/say <message>`: Sends a message to all connected players (supports entity selectors in `<message>`)
 * `/teleport [too many argument combinations]`: Sets entities' position and rotation
-* `/tp`: Alias to `/teleport`
+* `/tell <player> <message>`: Sends a message to specific players (supports entity selectors in `<message>`)
+* `/tp`: Alias for `/teleport`
+* `/w`: Alias for `/tell`
 
 \* Not technically in Minecraft
 
@@ -36,7 +39,7 @@ You can include spaces if you want (although this many spaces seems a bit excess
 ```
 @e [ type = mobs_mc:zombie , name = Bob ]
 ```
-This selector selects all MineClone/Mineclonia zombies named Bob (note: `name` might not actually work yet in MCL; I've only tested in MTG so far).
+This selector selects all MineClone2/5/ia zombies named Bob (note: `name` might not actually work yet in MCL; I've only tested in MTG so far).
 
 All arguments must be satisfied for an entity to be selected.
 
